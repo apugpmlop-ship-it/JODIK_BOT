@@ -1,143 +1,52 @@
 import requests
 import time
-import json
 import os
 import threading
 from flask import Flask
 
 BOT_TOKEN = '8899088892:AAF4GHhH8xvD7ZdPW9-n01ptIy41vWZ8noE'
-OWNER_PASSWORD = "JODIK_OFISAL091"
-OWNER_ID = 8074739624
-
-DATA_FILE = "bot_data.json"
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"users": {}, "blocked": [], "last_update": 0}
-
-def save_data(data):
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-data = load_data()
-users_db = data.get("users", {})
-blocked_users = set(data.get("blocked", []))
-last_update_id = data.get("last_update", 0)
 
 def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=10
+        )
     except Exception as e:
-        print(f"Send error: {e}")
-
-def get_admin_keyboard():
-    return {
-        "keyboard": [
-            ["📊 Статистика"],
-            ["👑 Список админов"],
-            ["🚪 Выйти"]
-        ],
-        "resize_keyboard": True
-    }
-
-def process_message(message):
-    global last_update_id
-    
-    chat_id = message.get("chat", {}).get("id")
-    if not chat_id:
-        return
-    
-    user_id = message.get("from", {}).get("id")
-    username = message.get("from", {}).get("username") or message.get("from", {}).get("first_name", "Без имени")
-    text = message.get("text", "")
-    
-    if user_id in blocked_users and user_id != OWNER_ID:
-        send_message(chat_id, "❌ Вы заблокированы.")
-        return
-    
-    if user_id not in users_db:
-        users_db[user_id] = {"role": "user", "username": username}
-        save_data(data)
-    
-    if text == "/start":
-        send_message(chat_id, "🤖 Бот JODIK работает 24/7!\n\nОтправь любое сообщение админам.")
-        return
-    
-    if text == "/admins":
-        if users_db.get(user_id, {}).get("role") == "admin":
-            send_message(chat_id, "✅ Админ-панель:", reply_markup=get_admin_keyboard())
-        else:
-            send_message(chat_id, "🔐 Введите пароль:")
-        return
-    
-    if text == OWNER_PASSWORD and users_db.get(user_id, {}).get("role") != "admin":
-        users_db[user_id]["role"] = "admin"
-        users_db[user_id]["admin_tag"] = "JODIK"
-        save_data(data)
-        send_message(chat_id, "✅ Добро пожаловать, главный админ JODIK!", reply_markup=get_admin_keyboard())
-        return
-    
-    if text == "📊 Статистика" and users_db.get(user_id, {}).get("role") == "admin":
-        total = len(users_db)
-        admins = sum(1 for d in users_db.values() if d.get("role") == "admin")
-        send_message(chat_id, f"📊 Статистика:\n👥 Пользователей: {total}\n👑 Админов: {admins}")
-        return
-    
-    if text == "👑 Список админов" and users_db.get(user_id, {}).get("role") == "admin":
-        admin_list = []
-        for uid, data_u in users_db.items():
-            if data_u.get("role") == "admin":
-                tag = data_u.get("admin_tag", "Без тега")
-                admin_list.append(f"👑 {tag} (ID: {uid})")
-        result = "📋 АДМИНИСТРАТОРЫ:\n\n" + "\n".join(admin_list) if admin_list else "Нет админов"
-        send_message(chat_id, result)
-        return
-    
-    if text == "🚪 Выйти" and users_db.get(user_id, {}).get("role") == "admin":
-        send_message(chat_id, "🚪 Вы вышли.", reply_markup={"remove_keyboard": True})
-        return
-    
-    if users_db.get(user_id, {}).get("role") != "admin":
-        admin_ids = [uid for uid, d in users_db.items() if d.get("role") == "admin"]
-        if admin_ids:
-            for admin_id in admin_ids:
-                send_message(admin_id, f"📩 Юзер: {username} (ID: {user_id})\nТекст: {text}")
-            send_message(chat_id, "✅ Сообщение отправлено администраторам.")
-        else:
-            send_message(chat_id, "❌ Администраторов сейчас нет. Мы сообщим вам, когда появится свободный админ.")
-        return
+        print(f"Ошибка: {e}")
 
 def run_bot():
-    global last_update_id
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    print("🔄 Бот запущен и ждёт сообщения...")
+    last_id = 0
+    print("Бот запущен...")
     while True:
         try:
-            params = {"timeout": 30, "offset": last_update_id + 1}
-            response = requests.get(url, params=params, timeout=35)
-            data = response.json()
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+            r = requests.get(url, params={"timeout": 30, "offset": last_id + 1}, timeout=35)
+            data = r.json()
             if data.get("ok"):
                 for update in data.get("result", []):
-                    last_update_id = update.get("update_id")
-                    if "message" in update:
-                        process_message(update["message"])
-                save_data(data)
+                    last_id = update.get("update_id")
+                    msg = update.get("message")
+                    if msg:
+                        chat_id = msg["chat"]["id"]
+                        text = msg.get("text", "")
+                        if text == "/start":
+                            send_message(chat_id, "✅ Бот работает на Render!")
+                        else:
+                            send_message(chat_id, f"Вы написали: {text}")
         except Exception as e:
-            print(f"Ошибка в боте: {e}")
-            time.sleep(5)
+            print(f"Ошибка: {e}")
+        time.sleep(1)
 
 app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "✅ Бот JODIK работает!", 200
+    return "Бот работает!", 200
 
 if __name__ == "__main__":
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    print("✅ Бот JODIK запущен на Render!")
+    thread = threading.Thread(target=run_bot, daemon=True)
+    thread.start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
