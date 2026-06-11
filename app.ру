@@ -1,29 +1,21 @@
 import requests
 import time
-import sys
-import re
 import json
 import os
 import threading
-from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
+from flask import Flask
 
-# ========== НАСТРОЙКИ ==========
-BOT_TOKEN = '8899088892:AAF4GHhH8xvD7ZdPW9-n01ptIy41vWZ8noE'  # ТВОЙ ТОКЕН
-CHANNEL_URL = 'https://t.me/ваш_канал'
+BOT_TOKEN = '8899088892:AAF4GHhH8xvD7ZdPW9-n01ptIy41vWZ8noE'
 OWNER_PASSWORD = "JODIK_OFISAL091"
-OWNER_TAG = "JODIK"
 OWNER_ID = 8074739624
-OWNER_USERNAME = "AAAP4GPMX"
 
 DATA_FILE = "bot_data.json"
 
-# ========== ЗАГРУЗКА/СОХРАНЕНИЕ ДАННЫХ ==========
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {"users": {}, "blocked": [], "blocked_usernames": [], "muted": {}, "requests": [], "last_update": 0}
+    return {"users": {}, "blocked": [], "last_update": 0}
 
 def save_data(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -32,121 +24,27 @@ def save_data(data):
 data = load_data()
 users_db = data.get("users", {})
 blocked_users = set(data.get("blocked", []))
-blocked_usernames = set(data.get("blocked_usernames", []))
-muted_users = data.get("muted", {})
-admin_requests = data.get("requests", [])
 last_update_id = data.get("last_update", 0)
 
-def save_all():
-    data["users"] = users_db
-    data["blocked"] = list(blocked_users)
-    data["blocked_usernames"] = list(blocked_usernames)
-    data["muted"] = muted_users
-    data["requests"] = admin_requests
-    data["last_update"] = last_update_id
-    save_data(data)
-
-# ========== ФУНКЦИИ ОТПРАВКИ ==========
-def send_message(chat_id, text, reply_markup=None, reply_to=None):
+def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data_msg = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    if reply_to:
-        data_msg["reply_to_message_id"] = reply_to
-    if reply_markup:
-        data_msg["reply_markup"] = reply_markup
     try:
-        requests.post(url, json=data_msg, timeout=15)
-    except:
-        pass
-
-def send_photo(chat_id, photo_url, caption="", reply_to=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    data_msg = {"chat_id": chat_id, "photo": photo_url, "caption": caption}
-    if reply_to:
-        data_msg["reply_to_message_id"] = reply_to
-    try:
-        requests.post(url, json=data_msg, timeout=15)
-    except:
-        pass
-
-def send_video(chat_id, video_url, caption="", reply_to=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo"
-    data_msg = {"chat_id": chat_id, "video": video_url, "caption": caption}
-    if reply_to:
-        data_msg["reply_to_message_id"] = reply_to
-    try:
-        requests.post(url, json=data_msg, timeout=15)
-    except:
-        pass
-
-def send_audio(chat_id, audio_url, caption="", reply_to=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendAudio"
-    data_msg = {"chat_id": chat_id, "audio": audio_url, "caption": caption}
-    if reply_to:
-        data_msg["reply_to_message_id"] = reply_to
-    try:
-        requests.post(url, json=data_msg, timeout=15)
-    except:
-        pass
-
-# ========== КЛАВИАТУРЫ ==========
-def get_inline_button():
-    return {"inline_keyboard": [[{"text": "📢 Наш канал", "url": CHANNEL_URL}]]}
+        requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+    except Exception as e:
+        print(f"Send error: {e}")
 
 def get_admin_keyboard():
     return {
         "keyboard": [
             ["📊 Статистика"],
-            ["👑 Список админов", "👥 Список пользователей"],
-            ["🚫 Заблокированные", "🔇 Мут"],
-            ["➕ Добавить админа", "➖ Удалить админа"],
-            ["🚫 Заблокировать", "🔓 Разблокировать"],
-            ["🔇 Замутить", "🔊 Размутить"],
-            ["💬 Чат админов"],
-            ["📝 Заявки в админы"],
+            ["👑 Список админов"],
             ["🚪 Выйти"]
         ],
         "resize_keyboard": True
     }
 
-def get_admin_chat_keyboard():
-    return {
-        "keyboard": [
-            ["💬 Написать админам"],
-            ["🚪 Выйти из чата"]
-        ],
-        "resize_keyboard": True
-    }
-
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def is_muted(user_id):
-    if str(user_id) in muted_users:
-        mute_time = datetime.fromisoformat(muted_users[str(user_id)])
-        if mute_time > datetime.now():
-            return True
-        else:
-            del muted_users[str(user_id)]
-            save_all()
-    return False
-
-def check_no_admins(chat_id):
-    admin_count = sum(1 for d in users_db.values() if d.get("role") == "admin")
-    if admin_count == 0:
-        send_message(chat_id, "❌ Администраторов сейчас нет. Мы сообщим вам, когда появится свободный админ.")
-        return True
-    return False
-
-def get_admin_tag(user_id):
-    if user_id == OWNER_ID:
-        return OWNER_TAG
-    return users_db.get(user_id, {}).get("admin_tag", "Admin")
-
-# ========== ОБРАБОТКА СООБЩЕНИЙ (ВЕСЬ ТВОЙ КОД) ==========
-admin_temp_data = {}
-admin_chat_enabled = {}
-
 def process_message(message):
-    global main_admin_id, last_update_id, admin_chat_enabled
+    global last_update_id
     
     chat_id = message.get("chat", {}).get("id")
     if not chat_id:
@@ -156,35 +54,16 @@ def process_message(message):
     username = message.get("from", {}).get("username") or message.get("from", {}).get("first_name", "Без имени")
     text = message.get("text", "")
     
-    if user_id == OWNER_ID:
-        username = OWNER_USERNAME
-    
-    photo = message.get("photo")
-    video = message.get("video")
-    audio = message.get("audio")
-    
-    # Проверка блокировки
-    if user_id in blocked_users or username in blocked_usernames:
-        if user_id != OWNER_ID:
-            send_message(chat_id, "❌ Вы заблокированы.")
-            return
-    
-    # Проверка мута
-    if is_muted(user_id) and user_id != OWNER_ID:
-        send_message(chat_id, "🔇 Вы замучены и не можете писать.")
+    if user_id in blocked_users and user_id != OWNER_ID:
+        send_message(chat_id, "❌ Вы заблокированы.")
         return
     
     if user_id not in users_db:
         users_db[user_id] = {"role": "user", "username": username}
-        save_all()
+        save_data(data)
     
-    # ========== ОБРАБОТКА ЗАЯВОК И Т.Д. (весь твой код) ==========
-    # ... (здесь весь код из твоего работающего бота)
-    # Для краткости я сократил, но ты можешь вставить полную логику
-    
-    # Простой ответ для проверки (замени на свой код)
     if text == "/start":
-        send_message(chat_id, "🤖 Бот работает на Render!\n\nОтправь любое сообщение админам.", reply_markup=get_inline_button())
+        send_message(chat_id, "🤖 Бот JODIK работает 24/7!\n\nОтправь любое сообщение админам.")
         return
     
     if text == "/admins":
@@ -196,68 +75,69 @@ def process_message(message):
     
     if text == OWNER_PASSWORD and users_db.get(user_id, {}).get("role") != "admin":
         users_db[user_id]["role"] = "admin"
-        users_db[user_id]["admin_tag"] = OWNER_TAG
-        save_all()
-        send_message(chat_id, f"✅ Добро пожаловать, главный администратор {OWNER_TAG}!", reply_markup=get_admin_keyboard())
+        users_db[user_id]["admin_tag"] = "JODIK"
+        save_data(data)
+        send_message(chat_id, "✅ Добро пожаловать, главный админ JODIK!", reply_markup=get_admin_keyboard())
         return
     
-    # Пересылка админам (обычный пользователь)
+    if text == "📊 Статистика" and users_db.get(user_id, {}).get("role") == "admin":
+        total = len(users_db)
+        admins = sum(1 for d in users_db.values() if d.get("role") == "admin")
+        send_message(chat_id, f"📊 Статистика:\n👥 Пользователей: {total}\n👑 Админов: {admins}")
+        return
+    
+    if text == "👑 Список админов" and users_db.get(user_id, {}).get("role") == "admin":
+        admin_list = []
+        for uid, data_u in users_db.items():
+            if data_u.get("role") == "admin":
+                tag = data_u.get("admin_tag", "Без тега")
+                admin_list.append(f"👑 {tag} (ID: {uid})")
+        result = "📋 АДМИНИСТРАТОРЫ:\n\n" + "\n".join(admin_list) if admin_list else "Нет админов"
+        send_message(chat_id, result)
+        return
+    
+    if text == "🚪 Выйти" and users_db.get(user_id, {}).get("role") == "admin":
+        send_message(chat_id, "🚪 Вы вышли.", reply_markup={"remove_keyboard": True})
+        return
+    
     if users_db.get(user_id, {}).get("role") != "admin":
-        if check_no_admins(chat_id):
-            return
-        admin_ids = [uid for uid, data in users_db.items() if data.get("role") == "admin"]
-        if text:
+        admin_ids = [uid for uid, d in users_db.items() if d.get("role") == "admin"]
+        if admin_ids:
             for admin_id in admin_ids:
-                send_message(admin_id, f"📩 Юзер: {username} (🆔 ID: {user_id})\nТекст: {text}")
+                send_message(admin_id, f"📩 Юзер: {username} (ID: {user_id})\nТекст: {text}")
             send_message(chat_id, "✅ Сообщение отправлено администраторам.")
+        else:
+            send_message(chat_id, "❌ Администраторов сейчас нет. Мы сообщим вам, когда появится свободный админ.")
         return
 
-# ========== ФЛЕСК ВЕБ-СЕРВЕР ==========
-app = Flask(__name__)
-
-@app.route('/')
-def index():
-    return "✅ Бот JODIK работает!", 200
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = request.get_json()
-    if update and "message" in update:
-        process_message(update["message"])
-    return jsonify({"ok": True})
-
-# ========== ЗАПУСК БОТА В ФОНЕ ==========
 def run_bot():
-    """Запускает long polling в отдельном потоке"""
     global last_update_id
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    
+    print("🔄 Бот запущен и ждёт сообщения...")
     while True:
         try:
-            params = {"timeout": 60, "offset": last_update_id + 1}
-            response = requests.get(url, params=params, timeout=65)
+            params = {"timeout": 30, "offset": last_update_id + 1}
+            response = requests.get(url, params=params, timeout=35)
             data = response.json()
             if data.get("ok"):
                 for update in data.get("result", []):
                     last_update_id = update.get("update_id")
                     if "message" in update:
                         process_message(update["message"])
-                save_all()
+                save_data(data)
         except Exception as e:
             print(f"Ошибка в боте: {e}")
-            time.sleep(10)
+            time.sleep(5)
 
-# ========== ЗАПУСК ==========
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "✅ Бот JODIK работает!", 200
+
 if __name__ == "__main__":
-    # Запускаем бота в фоновом потоке
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
-    
-    # Запускаем Flask веб-сервер
+    print("✅ Бот JODIK запущен на Render!")
     port = int(os.environ.get("PORT", 5000))
-    print(f"✅ Бот JODIK запущен на порту {port}!")
     app.run(host="0.0.0.0", port=port)
