@@ -1,52 +1,12 @@
-import requests
-import time
-import os
-import threading
 from flask import Flask
-
-BOT_TOKEN = '8899088892:AAF4GHhH8xvD7ZdPW9-n01ptIy41vWZ8noE'
+import os
 
 app = Flask(__name__)
 
-def send_message(chat_id, text):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10
-        )
-    except Exception as e:
-        print(f"Ошибка: {e}")
-
-def run_bot():
-    last_id = 0
-    print("Бот запущен...")
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-            r = requests.get(url, params={"timeout": 30, "offset": last_id + 1}, timeout=35)
-            data = r.json()
-            if data.get("ok"):
-                for update in data.get("result", []):
-                    last_id = update.get("update_id")
-                    msg = update.get("message")
-                    if msg:
-                        chat_id = msg["chat"]["id"]
-                        text = msg.get("text", "")
-                        if text == "/start":
-                            send_message(chat_id, "✅ Бот работает на Render!")
-                        else:
-                            send_message(chat_id, f"Вы написали: {text}")
-        except Exception as e:
-            print(f"Ошибка: {e}")
-        time.sleep(1)
-
 @app.route('/')
-def index():
-    return "Бот работает!", 200
+def home():
+    return "OK", 200
 
 if __name__ == "__main__":
-    thread = threading.Thread(target=run_bot, daemon=True)
-    thread.start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
