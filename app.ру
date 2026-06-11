@@ -6,6 +6,8 @@ from flask import Flask
 
 BOT_TOKEN = '8899088892:AAF4GHhH8xvD7ZdPW9-n01ptIy41vWZ8noE'
 
+app = Flask(__name__)
+
 def send_message(chat_id, text):
     try:
         requests.post(
@@ -38,8 +40,6 @@ def run_bot():
         except Exception as e:
             print(f"Ошибка: {e}")
         time.sleep(1)
-
-app = Flask(__name__)
 
 @app.route('/')
 def index():
