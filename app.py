@@ -135,14 +135,19 @@ def get_admin_keyboard():
     }
 
 def get_inline_channel():
-    return {"inline_keyboard": [[{"text": "📢 Наш канал", "url": CHANNEL_URL}]]}
+    return {
+        "inline_keyboard": [
+            [{"text": "📢 Наш канал", "url": CHANNEL_URL}],
+            [{"text": "➕ Добавить бота в группу", "url": f"https://t.me/{BOT_TOKEN.split(':')[0]}?startgroup=true"}]
+        ]
+    }
 
-def get_accept_decline_keyboard(user_id):
+def get_accept_decline_keyboard(admin_id, admin_tag):
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ Принять", "callback_data": f"accept_{user_id}"},
-                {"text": "❌ Отказать", "callback_data": f"decline_{user_id}"}
+                {"text": "✅ ДА, стать админом", "callback_data": f"accept_{admin_id}"},
+                {"text": "❌ НЕТ, отказаться", "callback_data": f"decline_{admin_id}"}
             ]
         ]
     }
@@ -199,13 +204,20 @@ def get_admin_tag(user_id):
     return users_db.get(user_id, {}).get("admin_tag", "Admin")
 
 def notify_all_admins(text, exclude_id=None):
-    for uid, data_u in users_db.items():
-        if data_u.get("role") == "admin" and uid != exclude_id:
-            send_message(uid, text)
+    admin_ids = [uid for uid, d in users_db.items() if d.get("role") == "admin" and uid != exclude_id]
+    if admin_ids:
+        for admin_id in admin_ids:
+            send_message(admin_id, text)
+        return True
+    return False
+
+def notify_no_admins(chat_id):
+    send_message(chat_id, "❌ Администраторов сейчас нет. Как только появится админ — ваше сообщение будет доставлено.")
+    return
 
 admin_temp_data = {}
 admin_chat_enabled = {}
-pending_requests = {}  # {admin_id: {"target_id": user_id, "username": username}}
+pending_requests = {}
 
 # ========== ОСНОВНАЯ ЛОГИКА ==========
 def process_message(message):
@@ -254,7 +266,7 @@ def process_message(message):
         if step == "waiting_new_admin_tag":
             admin_temp_data[user_id]["tag"] = text.strip()
             admin_temp_data[user_id]["step"] = "waiting_new_admin_password"
-            send_message(chat_id, "Придумайте пароль:")
+            send_message(chat_id, "Придумайте пароль для входа в админ-панель:")
             return
 
         if step == "waiting_new_admin_password":
@@ -262,8 +274,13 @@ def process_message(message):
             users_db[user_id]["admin_tag"] = admin_temp_data[user_id]["tag"]
             users_db[user_id]["password"] = text.strip()
             save_all()
-            send_message(chat_id, f"✅ Вы стали администратором!\nТег: {admin_temp_data[user_id]['tag']}\nПароль: {text.strip()}\n\nВведите /admins")
-            notify_all_admins(f"🆕 Новый администратор: {admin_temp_data[user_id]['tag']} (@{username})\nID: {user_id}")
+            send_message(chat_id, f"✅ ПОЗДРАВЛЯЮ! Вы стали администратором!\n\n📛 Ваш тег: {admin_temp_data[user_id]['tag']}\n🔐 Ваш пароль: {text.strip()}\n\n👉 Введите /admins и пароль для входа в админ-панель.")
+            
+            # Уведомление всем админам о новом админе
+            sent = notify_all_admins(f"🆕 НОВЫЙ АДМИНИСТРАТОР!\n📛 Тег: {admin_temp_data[user_id]['tag']}\n👤 Юзер: @{username}\n🆔 ID: {user_id}", exclude_id=user_id)
+            if not sent:
+                send_message(OWNER_ID, f"🆕 НОВЫЙ АДМИНИСТРАТОР!\n📛 Тег: {admin_temp_data[user_id]['tag']}\n👤 Юзер: @{username}\n🆔 ID: {user_id}")
+            
             del admin_temp_data[user_id]
             return
 
@@ -297,7 +314,7 @@ def process_message(message):
             target_id_str = admin_temp_data[user_id].get("target_id")
             if not target_id_str:
                 admin_temp_data[user_id]["target_id"] = text.strip()
-                send_message(chat_id, "Введите время мута: 30м, 2ч, 1д (или число в часах)")
+                send_message(chat_id, "Введите время мута:\n30м - 30 минут\n2ч - 2 часа\n1д - 1 день\n24 - 24 часа")
                 return
             else:
                 mute_time, time_str = parse_mute_time(text)
@@ -306,7 +323,7 @@ def process_message(message):
                     muted_users[target_id] = mute_time.isoformat()
                     save_all()
                     try:
-                        send_message(int(target_id), f"🔇 Вы замучены на {time_str}")
+                        send_message(int(target_id), f"🔇 Вас замутили на {time_str}")
                     except:
                         pass
                     send_message(chat_id, f"✅ Замучен ID: {target_id} на {time_str}")
@@ -333,38 +350,59 @@ def process_message(message):
             del admin_temp_data[user_id]
             return
 
+        if step == "waiting_remove_admin":
+            target_tag = text.strip()
+            for uid, data_u in users_db.items():
+                if data_u.get("admin_tag") == target_tag and data_u.get("role") == "admin" and uid != OWNER_ID:
+                    users_db[uid]["role"] = "user"
+                    removed_tag = data_u.get("admin_tag")
+                    removed_username = data_u.get("username")
+                    if "password" in users_db[uid]:
+                        del users_db[uid]["password"]
+                    if "admin_tag" in users_db[uid]:
+                        del users_db[uid]["admin_tag"]
+                    send_message(uid, "❌ Вас лишили прав администратора.")
+                    send_message(chat_id, f"✅ Администратор {removed_tag} (@{removed_username}) удалён")
+                    notify_all_admins(f"❌ Администратор {removed_tag} (@{removed_username}) удалён из админов")
+                    save_all()
+                    break
+            else:
+                send_message(chat_id, "❌ Администратор не найден")
+            del admin_temp_data[user_id]
+            return
+
     # ========== КОМАНДЫ ==========
     if text == "/start":
-        send_message(chat_id, "🤖 Бот JODIK\nОтправь текст, фото, видео, стикеры — всё уйдёт админам.", reply_markup=get_inline_channel())
+        send_message(chat_id, "🤖 <b>БОТ JODIK</b>\n\nОтправь текст, фото, видео, стикеры — всё уйдёт админам.\n\n📢 Подпишись на канал:\n👇 Кнопка ниже", reply_markup=get_inline_channel())
         return
 
     if text == "/admins":
         if users_db.get(user_id, {}).get("role") == "admin":
-            send_message(chat_id, "✅ Админ-панель", reply_markup=get_admin_keyboard())
+            send_message(chat_id, "✅ <b>АДМИН-ПАНЕЛЬ</b>\n\nВыберите действие:", reply_markup=get_admin_keyboard())
         else:
-            send_message(chat_id, "🔐 Введите пароль:")
+            send_message(chat_id, "🔐 <b>ВХОД ДЛЯ АДМИНОВ</b>\n\nВведите пароль:")
         return
 
     if text == OWNER_PASSWORD and users_db.get(user_id, {}).get("role") != "admin":
         users_db[user_id]["role"] = "admin"
         users_db[user_id]["admin_tag"] = OWNER_TAG
         save_all()
-        send_message(chat_id, f"✅ Главный админ {OWNER_TAG}!", reply_markup=get_admin_keyboard())
-        notify_all_admins(f"🔐 Главный администратор {OWNER_TAG} зашёл в панель")
+        send_message(chat_id, f"✅ <b>ГЛАВНЫЙ АДМИНИСТРАТОР</b>\n\nВаш тег: {OWNER_TAG}", reply_markup=get_admin_keyboard())
+        notify_all_admins(f"🔐 ГЛАВНЫЙ АДМИНИСТРАТОР {OWNER_TAG} зашёл в панель")
         return
 
     if user_id in users_db and users_db[user_id].get("password") == text and users_db[user_id].get("role") != "admin":
         users_db[user_id]["role"] = "admin"
         save_all()
         tag = users_db[user_id].get("admin_tag", "Admin")
-        send_message(chat_id, f"✅ Админ {tag}!", reply_markup=get_admin_keyboard())
-        notify_all_admins(f"🟢 Администратор {tag} зашёл в панель", exclude_id=user_id)
+        send_message(chat_id, f"✅ <b>АДМИНИСТРАТОР</b>\n\nВаш тег: {tag}", reply_markup=get_admin_keyboard())
+        notify_all_admins(f"🟢 АДМИНИСТРАТОР {tag} зашёл в панель", exclude_id=user_id)
         return
 
     # ========== ЧАТ АДМИНОВ ==========
     if admin_chat_enabled.get(user_id, False):
         if text == "💬 Написать админам":
-            send_message(chat_id, "💬 Режим чата включён\nПиши — все админы увидят\n\n🚪 Выйти из чата - кнопка ниже", 
+            send_message(chat_id, "💬 <b>ЧАТ АДМИНОВ</b>\n\nПишите — все админы увидят\n\n🚪 Выйти из чата - кнопка ниже", 
                         reply_markup={"keyboard": [["🚪 Выйти из чата"]], "resize_keyboard": True})
             return
         if text == "🚪 Выйти из чата":
@@ -376,14 +414,14 @@ def process_message(message):
             for uid, data_u in users_db.items():
                 if data_u.get("role") == "admin" and uid != user_id:
                     if text:
-                        send_message(uid, f"💬 [{tag}]: {text}")
+                        send_message(uid, f"💬 <b>[{tag}]</b>: {text}")
                     elif photo:
-                        send_photo(uid, photo[-1]["file_id"], f"💬 [{tag}]: фото")
+                        send_photo(uid, photo[-1]["file_id"], f"💬 <b>[{tag}]</b>: фото")
                     elif video:
-                        send_video(uid, video["file_id"], f"💬 [{tag}]: видео")
+                        send_video(uid, video["file_id"], f"💬 <b>[{tag}]</b>: видео")
                     elif sticker:
                         send_sticker(uid, sticker["file_id"])
-                        send_message(uid, f"💬 [{tag}]: стикер")
+                        send_message(uid, f"💬 <b>[{tag}]</b>: стикер")
             send_message(chat_id, "✅ Отправлено админам")
             return
 
@@ -395,7 +433,7 @@ def process_message(message):
             admins = sum(1 for d in users_db.values() if d.get("role") == "admin")
             blocked = len(blocked_ids) + len(blocked_usernames)
             muted = len(muted_users)
-            send_message(chat_id, f"📊 СТАТИСТИКА\n\n👥 Пользователей сейчас: {total}\n👑 Админов: {admins}\n🚫 Заблокировано: {blocked}\n🔇 Замучено: {muted}\n\n📈 Всего пользователей за всё время: {total_users_ever}\n💬 Всего сообщений: {total_messages}")
+            send_message(chat_id, f"📊 <b>СТАТИСТИКА БОТА</b>\n\n👥 Пользователей сейчас: {total}\n👑 Администраторов: {admins}\n🚫 Заблокировано: {blocked}\n🔇 Замучено: {muted}\n\n📈 Всего пользователей (за всё время): {total_users_ever}\n💬 Всего сообщений: {total_messages}")
             return
 
         if text == "👑 Список админов":
@@ -403,8 +441,8 @@ def process_message(message):
             for uid, data_u in users_db.items():
                 if data_u.get("role") == "admin":
                     tag = data_u.get("admin_tag", "Без тега")
-                    admin_list.append(f"👑 {tag} (@{data_u.get('username')}) ID: {uid}")
-            send_message(chat_id, "📋 АДМИНИСТРАТОРЫ:\n\n" + "\n".join(admin_list) if admin_list else "Нет админов")
+                    admin_list.append(f"👑 <b>{tag}</b> — @{data_u.get('username')} (ID: {uid})")
+            send_message(chat_id, "📋 <b>АДМИНИСТРАТОРЫ</b>\n\n" + "\n".join(admin_list) if admin_list else "Нет админов")
             return
 
         if text == "👥 Список пользователей":
@@ -412,57 +450,37 @@ def process_message(message):
             for uid, data_u in users_db.items():
                 if data_u.get("role") != "admin":
                     user_list.append(f"👤 @{data_u.get('username')} (ID: {uid})")
-            send_message(chat_id, "📋 ПОЛЬЗОВАТЕЛИ:\n\n" + "\n".join(user_list[:50]) if user_list else "Нет пользователей")
+            send_message(chat_id, "📋 <b>ПОЛЬЗОВАТЕЛИ</b>\n\n" + "\n".join(user_list[:50]) if user_list else "Нет пользователей")
             return
 
         if text == "🚫 Заблокированные":
             items = [f"🚫 ID: {uid}" for uid in blocked_ids] + [f"🚫 @{uname}" for uname in blocked_usernames]
-            send_message(chat_id, "🚫 ЗАБЛОКИРОВАННЫЕ:\n\n" + "\n".join(items) if items else "Нет")
+            send_message(chat_id, "🚫 <b>ЗАБЛОКИРОВАННЫЕ</b>\n\n" + "\n".join(items) if items else "Нет")
             return
 
         if text == "➕ Добавить админа" and user_id == OWNER_ID:
             admin_temp_data[user_id] = {"step": "waiting_username_for_add"}
-            send_message(chat_id, "Введите @username пользователя для добавления в админы:")
+            send_message(chat_id, "Введите @username или ID пользователя для приглашения в админы:")
             return
 
         if text == "➕ Добавить админа" and user_id != OWNER_ID:
-            send_message(chat_id, "❌ Только главный админ может добавлять админов")
-            return
-
-        if text.startswith("/add_admin") and user_id == OWNER_ID:
-            parts = text.split()
-            if len(parts) >= 2:
-                target_username = parts[1].lstrip('@')
-                target_id = None
-                for uid, data_u in users_db.items():
-                    if data_u.get("username") == target_username:
-                        target_id = uid
-                        break
-                if target_id:
-                    pending_requests[target_id] = {"admin_id": user_id, "username": target_username}
-                    send_message(target_id, f"🔑 Вам предлагают стать администратором!\nОтправитель: @{OWNER_USERNAME}\n\nЖмите кнопку ниже:",
-                                reply_markup=get_accept_decline_keyboard(user_id))
-                    send_message(chat_id, f"✅ Запрос отправлен @{target_username}")
-                else:
-                    send_message(chat_id, f"❌ Пользователь @{target_username} не найден")
-            else:
-                send_message(chat_id, "Использование: /add_admin @username")
+            send_message(chat_id, "❌ Только главный администратор может добавлять админов")
             return
 
         if text == "➖ Удалить админа" and user_id == OWNER_ID:
             tags = []
             for uid, data_u in users_db.items():
                 if data_u.get("role") == "admin" and uid != OWNER_ID:
-                    tags.append(f"{data_u.get('admin_tag', 'Без тега')} (@{data_u.get('username')})")
+                    tags.append(f"{data_u.get('admin_tag', 'Без тега')} — @{data_u.get('username')}")
             if tags:
-                admin_temp_data[user_id] = {"step": "waiting_tag_for_remove"}
+                admin_temp_data[user_id] = {"step": "waiting_remove_admin"}
                 send_message(chat_id, f"Введите ТЕГ админа для удаления:\n\n" + "\n".join(tags))
             else:
-                send_message(chat_id, "Нет других админов")
+                send_message(chat_id, "Нет других админов для удаления")
             return
 
         if text == "➖ Удалить админа" and user_id != OWNER_ID:
-            send_message(chat_id, "❌ Только главный админ может удалять админов")
+            send_message(chat_id, "❌ Только главный администратор может удалять админов")
             return
 
         if text == "🚫 Заблокировать":
@@ -487,18 +505,51 @@ def process_message(message):
 
         if text == "💬 Чат админов":
             admin_chat_enabled[user_id] = True
-            send_message(chat_id, "💬 ВЫ ВОШЛИ В ЧАТ АДМИНОВ\n\nПишите — все админы увидят\nДля выхода нажмите кнопку ниже",
+            send_message(chat_id, "💬 <b>ВЫ ВОШЛИ В ЧАТ АДМИНОВ</b>\n\nПишите — все админы увидят\n\n🚪 Выйти из чата - кнопка ниже",
                         reply_markup={"keyboard": [["💬 Написать админам"], ["🚪 Выйти из чата"]], "resize_keyboard": True})
             return
 
         if text == "🚪 Выйти":
             tag = get_admin_tag(user_id)
             send_message(chat_id, "🚪 Вы вышли из админ-панели", reply_markup={"remove_keyboard": True})
-            notify_all_admins(f"🔴 Администратор {tag} вышел из панели", exclude_id=user_id)
+            notify_all_admins(f"🔴 АДМИНИСТРАТОР {tag} вышел из панели", exclude_id=user_id)
             admin_chat_enabled[user_id] = False
             return
 
-    # ========== ОТВЕТ АДМИНА ПОЛЬЗОВАТЕЛЮ ==========
+    # ========== ПРИГЛАШЕНИЕ В АДМИНЫ ==========
+    if text.startswith("/add_admin") and user_id == OWNER_ID:
+        parts = text.split()
+        if len(parts) >= 2:
+            target = parts[1].strip()
+            target_id = None
+            target_username = None
+            
+            # Проверка: это ID или юзернейм?
+            try:
+                target_id = int(target)
+                for uid, data_u in users_db.items():
+                    if uid == target_id:
+                        target_username = data_u.get("username")
+                        break
+            except:
+                target_username = target.lstrip('@')
+                for uid, data_u in users_db.items():
+                    if data_u.get("username") == target_username:
+                        target_id = uid
+                        break
+            
+            if target_id and target_id in users_db:
+                pending_requests[target_id] = {"admin_id": user_id, "admin_tag": OWNER_TAG, "username": target_username}
+                send_message(target_id, f"🔑 <b>ПРИГЛАШЕНИЕ В АДМИНИСТРАТОРЫ</b>\n\nЗдравствуйте, @{target_username}!\n\nВас хочет пригласить в роль администратора бота <b>JODIK</b> администратор <b>{OWNER_TAG}</b>.\n\n<b>Вы согласны стать администратором?</b>",
+                            reply_markup=get_accept_decline_keyboard(user_id, OWNER_TAG))
+                send_message(chat_id, f"✅ Приглашение отправлено @{target_username} (ID: {target_id})")
+            else:
+                send_message(chat_id, f"❌ Пользователь не найден. Убедитесь, что он написал /start боту.")
+        else:
+            send_message(chat_id, "Использование: /add_admin @username\nили\n/add_admin 123456789")
+        return
+
+    # ========== ОТВЕТ АДМИНА ПОЛЬЗОВАТЕЛЮ (с reply) ==========
     reply_to_id = message.get("reply_to_message", {}).get("message_id") if message.get("reply_to_message") else None
     if reply_to_id and users_db.get(user_id, {}).get("role") == "admin":
         replied_text = message.get("reply_to_message", {}).get("text", "") or message.get("reply_to_message", {}).get("caption", "")
@@ -509,7 +560,7 @@ def process_message(message):
                 tag = get_admin_tag(user_id)
                 
                 if text:
-                    send_message(target_id, f"📨 Ответ от {tag}: {text}", reply_to=reply_to_id)
+                    send_message(target_id, f"📨 <b>ОТВЕТ ОТ АДМИНИСТРАТОРА {tag}</b>\n\n{text}", reply_to=reply_to_id)
                 elif photo:
                     send_photo(target_id, photo[-1]["file_id"], f"📨 Ответ от {tag}", reply_to=reply_to_id)
                 elif video:
@@ -531,22 +582,19 @@ def process_message(message):
         if admin_ids:
             for admin_id in admin_ids:
                 if text:
-                    send_message(admin_id, f"📩 Юзер: @{username} (ID: {user_id})\nТекст: {text}")
+                    send_message(admin_id, f"📩 <b>НОВОЕ СООБЩЕНИЕ</b>\n\n👤 @{username} (ID: {user_id})\n💬 Текст: {text}")
                 elif photo:
-                    send_photo(admin_id, photo[-1]["file_id"], f"📩 Юзер: @{username} (ID: {user_id})\nФото")
+                    send_photo(admin_id, photo[-1]["file_id"], f"📩 @{username} (ID: {user_id})\n📷 Фото")
                 elif video:
-                    send_video(admin_id, video["file_id"], f"📩 Юзер: @{username} (ID: {user_id})\nВидео")
+                    send_video(admin_id, video["file_id"], f"📩 @{username} (ID: {user_id})\n🎬 Видео")
                 elif audio:
-                    send_audio(admin_id, audio["file_id"], f"📩 Юзер: @{username} (ID: {user_id})\nАудио")
+                    send_audio(admin_id, audio["file_id"], f"📩 @{username} (ID: {user_id})\n🎵 Аудио")
                 elif sticker:
                     send_sticker(admin_id, sticker["file_id"])
-                    send_message(admin_id, f"📩 Юзер: @{username} (ID: {user_id})\nСтикер")
-                elif document:
-                    send_document(admin_id, document["file_id"], f"📩 Юзер: @{username} (ID: {user_id})\nДокумент")
-            send_message(chat_id, "✅ Отправлено админам")
+                    send_message(admin_id, f"📩 @{username} (ID: {user_id})\n🏷 Стикер")
+            send_message(chat_id, "✅ Сообщение отправлено администраторам")
         else:
-            send_message(chat_id, "❌ Администраторов сейчас нет. Мы сообщим вам, когда появится свободный админ.")
-        return
+            send_message(chat_id, "❌ Администраторов сейчас нет. Как только появится админ — мы отправим ваше сообщение.")
 
 # ========== ОБРАБОТКА КНОПОК ==========
 def process_callback(callback):
@@ -557,18 +605,23 @@ def process_callback(callback):
     if data.startswith("accept_"):
         admin_id = int(data.split("_")[1])
         if user_id in pending_requests:
-            send_message(chat_id, "Введите ваш ТЕГ (любое имя, например Support):")
+            admin_tag = pending_requests[user_id].get("admin_tag", OWNER_TAG)
+            send_message(chat_id, "✅ <b>ПРИГЛАШЕНИЕ ПРИНЯТО</b>\n\nТеперь придумайте свой <b>ТЕГ</b> (любое имя, например: Support, Admin, JODIK):")
             admin_temp_data[user_id] = {"step": "waiting_new_admin_tag"}
-            send_message(admin_id, f"✅ Пользователь @{pending_requests[user_id]['username']} согласился стать админом!")
+            send_message(admin_id, f"✅ ПОЛЬЗОВАТЕЛЬ @{pending_requests[user_id]['username']} СОГЛАСИЛСЯ СТАТЬ АДМИНИСТРАТОРОМ!")
             del pending_requests[user_id]
+        else:
+            send_message(chat_id, "❌ Запрос уже обработан или устарел.")
         return True
     
     elif data.startswith("decline_"):
         admin_id = int(data.split("_")[1])
         if user_id in pending_requests:
-            send_message(chat_id, "❌ Вы отказались стать администратором.")
-            send_message(admin_id, f"❌ Пользователь @{pending_requests[user_id]['username']} отказался стать админом.")
+            send_message(chat_id, "❌ <b>ОТКАЗ ОТ ПРИГЛАШЕНИЯ</b>\n\nВы отказались стать администратором бота JODIK.")
+            send_message(admin_id, f"❌ ПОЛЬЗОВАТЕЛЬ @{pending_requests[user_id]['username']} ОТКАЗАЛСЯ СТАТЬ АДМИНИСТРАТОРОМ.")
             del pending_requests[user_id]
+        else:
+            send_message(chat_id, "❌ Запрос уже обработан или устарел.")
         return True
     
     return False
@@ -577,7 +630,7 @@ def process_callback(callback):
 def run_bot():
     global last_update_id
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    print("🔄 Бот запущен...")
+    print("🔄 Бот JODIK запущен...")
     while True:
         try:
             params = {"timeout": 30, "offset": last_update_id + 1}
@@ -604,6 +657,6 @@ def index():
 if __name__ == "__main__":
     thread = threading.Thread(target=run_bot, daemon=True)
     thread.start()
-    print("✅ Бот JODIK запущен!")
+    print("✅ Бот JODIK успешно запущен!")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
